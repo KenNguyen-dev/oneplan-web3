@@ -1,0 +1,13 @@
+import { Module } from '@nestjs/common';
+import { StorageModule } from '../storage/storage.module';
+import { PlanItemsController } from './plan-items.controller';
+import { PlanItemStatsController } from './plan-item-stats.controller';
+import { PlanItemsService } from './plan-items.service';
+
+@Module({
+  imports: [StorageModule],
+  controllers: [PlanItemsController, PlanItemStatsController],
+  providers: [PlanItemsService],
+  exports: [PlanItemsService],
+})
+export class PlanItemsModule {}

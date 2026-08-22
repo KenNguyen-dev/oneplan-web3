@@ -1,0 +1,1633 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                        Int                        @id @default(autoincrement())
+  email                     String                     @unique @map("email") @db.VarChar(255)
+  displayName               String                     @map("display_name") @db.VarChar(100)
+  avatarUrl                 String?                    @map("avatar_url") @db.VarChar(500)
+  createdAt                 DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime                   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  friendCode                String?                    @unique @map("friend_code") @db.VarChar(64)
+  autoRenewEnabled          Boolean                    @default(false) @map("auto_renew_enabled")
+  appAccountToken           String?                    @unique @map("app_account_token") @db.Uuid
+  gracePeriodExpiresAt      DateTime?                  @map("grace_period_expires_at") @db.Timestamptz(6)
+  originalTransactionId     String?                    @unique @map("original_transaction_id") @db.VarChar(255)
+  subscriptionExpiresAt     DateTime?                  @map("subscription_expires_at") @db.Timestamptz(6)
+  subscriptionProductId     String?                    @map("subscription_product_id") @db.VarChar(255)
+  subscriptionStatus        SubscriptionStatus         @default(NONE) @map("subscription_status")
+  preferredCurrency         Currency                   @default(VND) @map("preferred_currency")
+  // Engagement-push personalization + Apple-4.5.4 marketing consent.
+  // `locale` drives the language of AI-generated engagement copy.
+  // `engagementPushEnabled` is the opt-out; `engagementConsentedAt` is the
+  // auditable opt-IN — no engagement push is sent until consent is stamped.
+  locale                   EngagementLocale          @default(EN) @map("locale")
+  engagementPushEnabled    Boolean                   @default(true) @map("engagement_push_enabled")
+  engagementConsentedAt    DateTime?                 @map("engagement_consented_at") @db.Timestamptz(6)
+  authAccounts             AuthAccount[]
+  budgetPayments           BudgetPayment[]
+  chatMessages             ChatMessage[]
+  deviceTokens             DeviceToken[]
+  expenses                 Expense[]
+  expenseShares            ExpenseShare[]
+  receivedFriendRequests   FriendRequest[]           @relation("FriendRequestReceiver")
+  sentFriendRequests       FriendRequest[]           @relation("FriendRequestSender")
+  friendshipsAsA           Friendship[]              @relation("FriendshipUserA")
+  friendshipsAsB           Friendship[]              @relation("FriendshipUserB")
+  acquisitions             MarketplaceAcquisition[]
+  marketplaceListings      MarketplaceListing[]      @relation("ListingCreator")
+  marketplaceRatings       MarketplaceRating[]
+  recentLocations          RecentLocation[]
+  refreshTokens            RefreshToken[]
+  subscriptionTransactions SubscriptionTransaction[]
+  storeNotifications       StoreNotification[]
+  createdTrips             Trip[]                    @relation("TripCreator")
+  activities               TripActivity[]
+  tripMembers              TripMember[]
+  tripPhotos               TripPhoto[]
+  tripNotes                TripNote[]
+  planItemMembers          TripPlanItemMember[]
+  analyticsSessions        AnalyticsSession[]        @relation("UserAnalyticsSessions")
+  analyticsEvents          AnalyticsEvent[]          @relation("UserAnalyticsEvents")
+  boards                   Board[]
+  pinExtractionSessions    PinExtractionSession[]
+  scanCreditGrants         ScanCreditGrant[]
+  tripRequests             TripRequest[]
+  engagementNotifications  EngagementNotification[]
+  giftsReceived            GiftLog[]
+  walletAccount             WalletAccount?
+  vaultTransactions         VaultTransaction[]
+  cashSettlementsOwed       VaultCashSettlement[]      @relation("cashSettlementFrom")
+  cashSettlementsReceived   VaultCashSettlement[]      @relation("cashSettlementTo")
+  tripEndRequestsStarted    TripEndRequest[]           @relation("TripEndRequester")
+  tripEndVotes              TripEndVote[]
+
+  @@map("user")
+}
+
+// A read-only snapshot of everything we knew about a user, taken at the moment
+// they delete their account. The account itself is still really deleted (the
+// User row and its data are removed as before); this archive keeps the
+// identified copy for a limited window so support/admin can look it up, and a
+// cron purges it after DELETED_USER_RETENTION_DAYS (30).
+//
+// Deliberately has NO relation to User: the FK would either block the delete or
+// cascade the archive away, and the whole point is that it outlives the user.
+model DeletedUserArchive {
+  id             Int      @id @default(autoincrement())
+  originalUserId Int      @map("original_user_id")
+  email          String   @map("email") @db.VarChar(255)
+  displayName    String   @map("display_name") @db.VarChar(255)
+  // Full snapshot: profile, auth providers, trips, expenses, subscription,
+  // scan credits, gifts and an activity summary.
+  snapshot       Json     @map("snapshot")
+  deletedAt      DateTime @default(now()) @map("deleted_at") @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([deletedAt])
+  @@index([email])
+  @@map("deleted_user_archive")
+}
+
+// Admin loyalty gifts (scan credits and/or a Pro package). One row per gift,
+// for the admin "Gift" history. The grant of record still lives in
+// ScanCreditGrant (scans) / the User subscription columns (package); this is
+// the human-readable audit log.
+model GiftLog {
+  id                    Int       @id @default(autoincrement())
+  recipientUserId       Int       @map("recipient_user_id")
+  recipientEmail        String    @map("recipient_email") @db.VarChar(255)
+  adminEmail            String    @map("admin_email") @db.VarChar(255)
+  scans                 Int       @default(0) @map("scans")
+  package               String?   @map("package") @db.VarChar(32)
+  subscriptionExpiresAt DateTime? @map("subscription_expires_at") @db.Timestamptz(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  recipient             User      @relation(fields: [recipientUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([recipientUserId])
+  @@index([createdAt])
+  @@map("gift_log")
+}
+
+model AuthAccount {
+  id             Int          @id @default(autoincrement())
+  userId         Int          @map("user_id")
+  provider       AuthProvider @map("provider")
+  providerUserId String       @map("provider_user_id") @db.VarChar(255)
+  passwordHash   String?      @map("password_hash") @db.VarChar(255)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("auth_account")
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  jti       String   @unique @map("jti") @db.VarChar(36)
+  family    String   @map("family") @db.VarChar(36)
+  isRevoked Boolean  @default(false) @map("is_revoked")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_token")
+}
+
+model Country {
+  id                  Int                  @id @default(autoincrement())
+  name                String               @map("name") @db.VarChar(100)
+  iso3                String?              @map("iso3") @db.Char(3)
+  iso2                String?              @map("iso2") @db.Char(2)
+  numericCode         String?              @map("numeric_code") @db.Char(3)
+  phoneCode           String?              @map("phone_code") @db.VarChar(255)
+  capital             String?              @map("capital") @db.VarChar(255)
+  currency            String?              @map("currency") @db.VarChar(255)
+  currencyName        String?              @map("currency_name") @db.VarChar(255)
+  currencySymbol      String?              @map("currency_symbol") @db.VarChar(255)
+  tld                 String?              @map("tld") @db.VarChar(255)
+  native              String?              @map("native") @db.VarChar(255)
+  region              String?              @map("region") @db.VarChar(255)
+  subRegion           String?              @map("sub_region") @db.VarChar(255)
+  timezones           String?              @map("timezones")
+  translations        String?              @map("translations")
+  latitude            Decimal?             @map("latitude") @db.Decimal(10, 8)
+  longitude           Decimal?             @map("longitude") @db.Decimal(11, 8)
+  emoji               String?              @map("emoji") @db.VarChar(191)
+  emojiU              String?              @map("emoji_u") @db.VarChar(191)
+  createdAt           DateTime?            @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  flag                Boolean              @default(true) @map("flag")
+  wikiDataId          String?              @map("wiki_data_id") @db.VarChar(255)
+  boards              Board[]
+  cities              City[]
+  marketplaceListings MarketplaceListing[]
+  states              State[]
+  trips               Trip[]
+  tripRequests        TripRequest[]
+
+  @@map("country")
+}
+
+model State {
+  id                  Int                  @id @default(autoincrement())
+  name                String               @map("name") @db.VarChar(255)
+  countryCode         String               @map("country_code") @db.Char(2)
+  fipsCode            String?              @map("fips_code") @db.VarChar(255)
+  iso2                String?              @map("iso2") @db.VarChar(255)
+  type                String?              @map("type") @db.VarChar(191)
+  latitude            Decimal?             @map("latitude") @db.Decimal(10, 8)
+  longitude           Decimal?             @map("longitude") @db.Decimal(11, 8)
+  createdAt           DateTime?            @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  flag                Boolean              @default(true) @map("flag")
+  wikiDataId          String?              @map("wiki_data_id") @db.VarChar(255)
+  countryId           Int                  @map("country_id")
+  boards              Board[]
+  cities              City[]
+  marketplaceListings MarketplaceListing[]
+  country             Country              @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "country_region_final")
+  trips               Trip[]
+  tripRequests        TripRequest[]
+
+  @@index([countryId])
+  @@map("state")
+}
+
+model City {
+  id                  Int                  @id @default(autoincrement())
+  name                String               @map("name") @db.VarChar(255)
+  stateCode           String               @map("state_code") @db.VarChar(255)
+  countryCode         String               @map("country_code") @db.Char(2)
+  latitude            Decimal              @map("latitude") @db.Decimal(10, 8)
+  longitude           Decimal              @map("longitude") @db.Decimal(11, 8)
+  createdAt           DateTime?            @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime?            @map("updated_at") @db.Timestamptz(6)
+  flag                Boolean              @default(true) @map("flag")
+  wikiDataId          String?              @map("wiki_data_id") @db.VarChar(255)
+  countryId           Int                  @map("country_id")
+  stateId             Int                  @map("state_id")
+  country             Country              @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state               State                @relation(fields: [stateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  boards              Board[]
+  marketplaceListings MarketplaceListing[]
+  trips               Trip[]
+  tripRequests        TripRequest[]
+
+  @@index([stateId])
+  @@index([countryId])
+  @@map("city")
+}
+
+model Trip {
+  id                   Int                 @id @default(autoincrement())
+  name                 String              @map("name") @db.VarChar(255)
+  coverImageUrl        String?             @map("cover_image_url") @db.VarChar(500)
+  status               TripStatus          @default(PLANNING) @map("status")
+  startDate            DateTime?           @map("start_date") @db.Date
+  endDate              DateTime?           @map("end_date") @db.Date
+  inviteCode           String?             @unique @map("invite_code") @db.VarChar(64)
+  createdById          Int                 @map("created_by_id")
+  cityId               Int?                @map("city_id")
+  stateId              Int?                @map("state_id")
+  countryId            Int?                @map("country_id")
+  currency             Currency            @default(VND) @map("currency")
+  localCurrencies      Currency[]          @default([]) @map("local_currencies")
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime            @default(now()) @map("updated_at") @db.Timestamptz(6)
+  marketplaceListingId Int?                @map("marketplace_listing_id")
+  marketplaceListing   MarketplaceListing? @relation(fields: [marketplaceListingId], references: [id], onDelete: SetNull)
+  budgets              Budget[]
+  chatMessages         ChatMessage[]
+  expenses             Expense[]
+  city                 City?               @relation(fields: [cityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  country              Country?            @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy            User                @relation("TripCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state                State?              @relation(fields: [stateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  activities           TripActivity[]
+  members              TripMember[]
+  photos               TripPhoto[]
+  notes                TripNote[]
+  planItems            TripPlanItem[]
+  vault                TripVault?
+  endRequest           TripEndRequest?
+
+  @@index([createdById])
+  @@index([cityId])
+  @@index([stateId])
+  @@index([countryId])
+  @@index([status])
+  @@map("trip")
+}
+
+model TripRequest {
+  id                   Int                 @id @default(autoincrement())
+  userId               Int                 @map("user_id")
+  cityId               Int?                @map("city_id")
+  stateId              Int?                @map("state_id")
+  countryId            Int?                @map("country_id")
+  tag                  ListingTag          @map("tag")
+  budget               Decimal?            @map("budget") @db.Decimal(18, 2)
+  currency             Currency            @default(VND) @map("currency")
+  status               TripRequestStatus   @default(OPEN) @map("status")
+  fulfilledByListingId Int?                @map("fulfilled_by_listing_id")
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime            @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  city                 City?               @relation(fields: [cityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state                State?              @relation(fields: [stateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  country              Country?            @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fulfilledByListing   MarketplaceListing? @relation(fields: [fulfilledByListingId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([fulfilledByListingId])
+  @@map("trip_request")
+}
+
+model TripMember {
+  id                    Int          @id @default(autoincrement())
+  tripId                Int          @map("trip_id")
+  userId                Int          @map("user_id")
+  inviteStatus          InviteStatus @default(PENDING) @map("invite_status")
+  role                  TripMemberRole @default(MEMBER)
+  /// Host marked this member's vault debt cleared off-chain so they may leave.
+  vaultLeaveClearedAt   DateTime?    @map("vault_leave_cleared_at") @db.Timestamptz(6)
+  /// Member announced leave; host must confirm (and payout if net > 0).
+  vaultLeaveRequestedAt DateTime?    @map("vault_leave_requested_at") @db.Timestamptz(6)
+  /// Signed net (micro-USDC) snapshotted at announce time.
+  vaultLeaveRequestNetMicro BigInt?  @map("vault_leave_request_net_micro")
+  joinedAt              DateTime?    @map("joined_at") @db.Timestamptz(6)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  lastSeenChatMessageId Int?         @map("last_seen_chat_message_id")
+  trip                  Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tripId, userId])
+  @@index([tripId])
+  @@index([userId])
+  @@map("trip_member")
+}
+
+model Budget {
+  id               Int             @id @default(autoincrement())
+  tripId           Int             @map("trip_id")
+  name             String          @map("name") @db.VarChar(255)
+  amount           Decimal         @map("amount") @db.Decimal(18, 2)
+  perPersonAmount  Decimal?        @map("per_person_amount") @db.Decimal(18, 2)
+  scope            PlanScope       @default(GROUP) @map("scope")
+  originalAmount   Decimal?        @map("original_amount") @db.Decimal(18, 2)
+  originalCurrency Currency?       @map("original_currency")
+  exchangeRate     Decimal?        @map("exchange_rate") @db.Decimal(18, 8)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  trip             Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payments         BudgetPayment[]
+
+  @@index([tripId])
+  @@map("budget")
+}
+
+model BudgetPayment {
+  id        Int       @id @default(autoincrement())
+  budgetId  Int       @map("budget_id")
+  userId    Int       @map("user_id")
+  amount    Decimal   @map("amount") @db.Decimal(18, 2)
+  isPaid    Boolean   @default(false) @map("is_paid")
+  paidAt    DateTime? @map("paid_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  budget    Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([budgetId, userId])
+  @@index([budgetId])
+  @@index([userId])
+  @@map("budget_payment")
+}
+
+model Expense {
+  id               Int               @id @default(autoincrement())
+  tripId           Int               @map("trip_id")
+  paidById         Int?              @map("paid_by_id")
+  name             String            @map("name") @db.VarChar(255)
+  amount           Decimal           @map("amount") @db.Decimal(18, 2)
+  category         ExpenseCategory   @default(OTHER) @map("category")
+  note             String?           @map("note") @db.VarChar(500)
+  receiptUrl       String?           @map("receipt_url") @db.VarChar(500)
+  originalAmount   Decimal?          @map("original_amount") @db.Decimal(18, 2)
+  originalCurrency Currency?         @map("original_currency")
+  exchangeRate     Decimal?          @map("exchange_rate") @db.Decimal(18, 8)
+  expenseDate      DateTime          @default(now()) @map("expense_date") @db.Timestamptz(6)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+  paidBy           User?             @relation(fields: [paidById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  trip             Trip              @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  shares           ExpenseShare[]
+  vaultTransaction VaultTransaction?
+
+  @@index([tripId])
+  @@index([paidById])
+  @@index([category])
+  @@index([expenseDate])
+  @@map("expense")
+}
+
+model ExpenseShare {
+  id          Int       @id @default(autoincrement())
+  expenseId   Int       @map("expense_id")
+  userId      Int       @map("user_id")
+  shareAmount Decimal   @map("share_amount") @db.Decimal(18, 2)
+  isSettled   Boolean   @default(false) @map("is_settled")
+  settledAt   DateTime? @map("settled_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  expense     Expense   @relation(fields: [expenseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([expenseId, userId])
+  @@index([expenseId])
+  @@index([userId])
+  @@map("expense_share")
+}
+
+model TripPlanItem {
+  id                     Int                      @id @default(autoincrement())
+  tripId                 Int                      @map("trip_id")
+  planDate               DateTime?                @map("plan_date") @db.Date
+  title                  String                   @map("title") @db.VarChar(255)
+  description            String?                  @map("description") @db.VarChar(500)
+  location               String?                  @map("location") @db.VarChar(500)
+  latitude               Float?                   @map("latitude")
+  longitude              Float?                   @map("longitude")
+  address                String?                  @map("address") @db.VarChar(500)
+  startTime              String?                  @map("start_time") @db.VarChar(5)
+  category               ExpenseCategory?         @map("category")
+  voiceUrl               String?                  @map("voice_url") @db.VarChar(500)
+  voiceDuration          Int?                     @map("voice_duration")
+  sortOrder              Int                      @default(0) @map("sort_order")
+  createdAt              DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  dayNumber              Int?                     @map("day_number")
+  notifiedAt             DateTime?                @map("notified_at") @db.Timestamptz(6)
+  plan_reminder_delivery plan_reminder_delivery[]
+  trip                   Trip                     @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  members                TripPlanItemMember[]
+
+  @@index([tripId])
+  @@index([tripId, planDate])
+  @@index([tripId, dayNumber])
+  @@index([location])
+  @@map("trip_plan_item")
+}
+
+model TripPlanItemMember {
+  id             Int          @id @default(autoincrement())
+  tripPlanItemId Int          @map("trip_plan_item_id")
+  userId         Int          @map("user_id")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  tripPlanItem   TripPlanItem @relation(fields: [tripPlanItemId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tripPlanItemId, userId])
+  @@index([tripPlanItemId])
+  @@index([userId])
+  @@map("trip_plan_item_member")
+}
+
+model MarketplaceListing {
+  id                    Int                      @id @default(autoincrement())
+  publicId              String                   @unique @map("public_id") @db.VarChar(32)
+  createdById           Int                      @map("created_by_id")
+  name                  String                   @map("name") @db.VarChar(255)
+  description           String?                  @map("description") @db.VarChar(500)
+  coverImageUrl         String?                  @map("cover_image_url") @db.VarChar(500)
+  playProductId         String?                  @map("play_product_id") @db.VarChar(255)
+  cityId                Int?                     @map("city_id")
+  stateId               Int?                     @map("state_id")
+  countryId             Int?                     @map("country_id")
+  price                 Decimal                  @map("price") @db.Decimal(18, 2)
+  currency              Currency                 @default(VND) @map("currency")
+  durationDays          Int                      @map("duration_days")
+  status                MarketplaceListingStatus @default(DRAFT) @map("status")
+  featuredAt            DateTime?                @map("featured_at") @db.Timestamptz(6)
+  featuredOrder         Int?                     @map("featured_order")
+  deletedAt             DateTime?                @map("deleted_at") @db.Timestamptz(6)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  tags                  ListingTag[]             @default([]) @map("tags")
+  acquisitions          MarketplaceAcquisition[]
+  city                  City?                    @relation(fields: [cityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  country               Country?                 @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy             User                     @relation("ListingCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state                 State?                   @relation(fields: [stateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  items                 TripPlanMarketItem[]
+  trips                 Trip[]
+  ratings               MarketplaceRating[]
+  fulfilledTripRequests TripRequest[]
+
+  @@index([createdById])
+  @@index([cityId])
+  @@index([stateId])
+  @@index([countryId])
+  @@index([status])
+  @@index([featuredOrder])
+  @@map("marketplace_listing")
+}
+
+model TripPlanMarketItem {
+  id          Int                @id @default(autoincrement())
+  title       String             @map("title") @db.VarChar(255)
+  description String?            @map("description") @db.VarChar(500)
+  location    String?            @map("location") @db.VarChar(500)
+  latitude    Float?             @map("latitude")
+  longitude   Float?             @map("longitude")
+  address     String?            @map("address") @db.VarChar(500)
+  startTime   String?            @map("start_time") @db.VarChar(5)
+  category    ExpenseCategory?   @map("category")
+  imageUrls   String[]           @map("image_urls")
+  sortOrder   Int                @default(0) @map("sort_order")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  dayNumber   Int                @map("day_number")
+  listingId   Int                @map("listing_id")
+  listing     MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([listingId])
+  @@map("trip_plan_market_item")
+}
+
+model MarketplaceAcquisition {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  listingId  Int?     @map("listing_id")
+  acquiredAt DateTime @default(now()) @map("acquired_at") @db.Timestamptz(6)
+
+  // Snapshot of the listing at acquisition time. Buyers see this forever,
+  // regardless of later edits or deletion of the live listing.
+  snapshotName             String       @map("snapshot_name") @db.VarChar(255)
+  snapshotDescription      String?      @map("snapshot_description") @db.VarChar(500)
+  snapshotCoverImageUrl    String?      @map("snapshot_cover_image_url") @db.VarChar(500)
+  snapshotPrice            Decimal      @map("snapshot_price") @db.Decimal(18, 2)
+  snapshotCurrency         Currency     @map("snapshot_currency")
+  snapshotDurationDays     Int          @map("snapshot_duration_days")
+  snapshotTags             ListingTag[] @default([]) @map("snapshot_tags")
+  snapshotCityId           Int?         @map("snapshot_city_id")
+  snapshotStateId          Int?         @map("snapshot_state_id")
+  snapshotCountryId        Int?         @map("snapshot_country_id")
+  snapshotCreatorName      String       @map("snapshot_creator_name") @db.VarChar(100)
+  snapshotCreatorAvatarUrl String?      @map("snapshot_creator_avatar_url") @db.VarChar(500)
+
+  listing MarketplaceListing? @relation(fields: [listingId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payment MarketplacePayment?
+  items   AcquisitionItem[]
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
+  @@map("marketplace_acquisition")
+}
+
+model AcquisitionItem {
+  id            Int                    @id @default(autoincrement())
+  acquisitionId Int                    @map("acquisition_id")
+  dayNumber     Int                    @map("day_number")
+  title         String                 @map("title") @db.VarChar(255)
+  description   String?                @map("description") @db.VarChar(500)
+  location      String?                @map("location") @db.VarChar(500)
+  latitude      Float?                 @map("latitude")
+  longitude     Float?                 @map("longitude")
+  address       String?                @map("address") @db.VarChar(500)
+  startTime     String?                @map("start_time") @db.VarChar(5)
+  category      ExpenseCategory?       @map("category")
+  imageUrls     String[]               @map("image_urls")
+  sortOrder     Int                    @default(0) @map("sort_order")
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  acquisition   MarketplaceAcquisition @relation(fields: [acquisitionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([acquisitionId])
+  @@index([acquisitionId, dayNumber, sortOrder])
+  @@map("acquisition_item")
+}
+
+model MarketplacePayment {
+  id            Int                    @id @default(autoincrement())
+  acquisitionId Int                    @unique @map("acquisition_id")
+  amount        Decimal                @map("amount") @db.Decimal(18, 2)
+  currency      String                 @default("VND") @map("currency") @db.VarChar(3)
+  transactionId String?                @map("transaction_id") @db.VarChar(255)
+  status        PaymentStatus          @default(COMPLETED) @map("status")
+  paidAt        DateTime?              @map("paid_at") @db.Timestamptz(6)
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  acquisition   MarketplaceAcquisition @relation(fields: [acquisitionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([acquisitionId])
+  @@map("marketplace_payment")
+}
+
+model MarketplaceRating {
+  id        Int                @id @default(autoincrement())
+  userId    Int
+  listingId Int
+  rating    Int
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing   MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listingId])
+  @@index([listingId])
+}
+
+enum MarketplaceListingStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+
+  @@map("marketplace_listing_status")
+}
+
+model TripPhoto {
+  id           Int      @id @default(autoincrement())
+  tripId       Int      @map("trip_id")
+  uploadedById Int      @map("uploaded_by_id")
+  photoUrl     String   @map("photo_url") @db.VarChar(500)
+  caption      String?  @map("caption") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  trip         Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tripId])
+  @@index([uploadedById])
+  @@map("trip_photo")
+}
+
+model TripNote {
+  id          Int      @id @default(autoincrement())
+  tripId      Int      @map("trip_id")
+  createdById Int      @map("created_by_id")
+  title       String   @map("title") @db.VarChar(255)
+  body        String?  @map("body") @db.VarChar(2000)
+  isDone      Boolean  @default(false) @map("is_done")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tripId])
+  @@index([createdById])
+  @@map("trip_note")
+}
+
+model TripActivity {
+  id        Int            @id @default(autoincrement())
+  tripId    Int            @map("trip_id")
+  userId    Int?           @map("user_id")
+  action    ActivityAction @map("action")
+  targetId  Int?           @map("target_id")
+  metadata  Json?          @map("metadata")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  trip      Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user      User?          @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([tripId])
+  @@index([userId])
+  @@index([tripId, createdAt])
+  @@map("trip_activity")
+}
+
+model RecentLocation {
+  id                      Int      @id @default(autoincrement())
+  userId                  Int      @map("user_id")
+  name                    String   @db.VarChar(255)
+  address                 String   @default("") @db.VarChar(500)
+  latitude                Decimal? @db.Decimal(10, 8)
+  longitude               Decimal? @db.Decimal(11, 8)
+  lastViewedAt            DateTime @default(now()) @map("last_viewed_at") @db.Timestamptz(6)
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  pointOfInterestCategory String?  @map("point_of_interest_category") @db.VarChar(50)
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name, address])
+  @@index([userId, lastViewedAt])
+  @@map("recent_location")
+}
+
+model ChatMessage {
+  id             Int             @id @default(autoincrement())
+  tripId         Int             @map("trip_id")
+  senderId       Int?            @map("sender_id")
+  content        String          @map("content") @db.VarChar(2000)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  type           ChatMessageType @default(TEXT) @map("type")
+  imageObjectKey String?         @map("image_object_key") @db.VarChar(500)
+  sender         User?           @relation(fields: [senderId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  trip           Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([tripId, createdAt])
+  @@index([tripId, id])
+  @@index([senderId])
+  @@map("chat_message")
+}
+
+model DeviceToken {
+  id                                Int                      @id @default(autoincrement())
+  userId                            Int                      @map("user_id")
+  token                             String                   @unique @map("token") @db.VarChar(200)
+  platform                          String                   @default("ios") @map("platform") @db.VarChar(10)
+  createdAt                         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  live_activities_enabled           Boolean                  @default(false)
+  live_activity_push_to_start_token String?                  @db.VarChar(200)
+  updated_at                        DateTime                 @default(now()) @db.Timestamptz(6)
+  user                              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan_reminder_delivery            plan_reminder_delivery[]
+
+  @@index([userId])
+  @@map("device_token")
+}
+
+model FriendRequest {
+  id         Int                 @id @default(autoincrement())
+  senderId   Int                 @map("sender_id")
+  receiverId Int                 @map("receiver_id")
+  status     FriendRequestStatus @default(PENDING) @map("status")
+  createdAt  DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  receiver   User                @relation("FriendRequestReceiver", fields: [receiverId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sender     User                @relation("FriendRequestSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([senderId, receiverId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("friend_request")
+}
+
+model Friendship {
+  id        Int      @id @default(autoincrement())
+  userAId   Int      @map("user_a_id")
+  userBId   Int      @map("user_b_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  userA     User     @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userB     User     @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+  @@map("friendship")
+}
+
+model SubscriptionTransaction {
+  id                    Int       @id @default(autoincrement())
+  userId                Int       @map("user_id")
+  transactionId         String    @unique @map("transaction_id") @db.VarChar(255)
+  originalTransactionId String    @map("original_transaction_id") @db.VarChar(255)
+  productId             String    @map("product_id") @db.VarChar(255)
+  purchaseDate          DateTime  @map("purchase_date") @db.Timestamptz(6)
+  expiresDate           DateTime? @map("expires_date") @db.Timestamptz(6)
+  revocationDate        DateTime? @map("revocation_date") @db.Timestamptz(6)
+  notificationType      String?   @map("notification_type") @db.VarChar(100)
+  notificationUUID      String?   @unique @map("notification_uuid") @db.VarChar(255)
+  signedDate            DateTime? @map("signed_date") @db.Timestamptz(6)
+  environment           String?   @map("environment") @db.VarChar(50)
+  ownershipType         String?   @map("ownership_type") @db.VarChar(100)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([originalTransactionId])
+  @@map("subscription_transaction")
+}
+
+model StoreNotification {
+  id                    Int       @id @default(autoincrement())
+  notificationUUID      String    @unique @map("notification_uuid") @db.VarChar(255)
+  notificationType      String?   @map("notification_type") @db.VarChar(100)
+  originalTransactionId String?   @map("original_transaction_id") @db.VarChar(255)
+  transactionId         String?   @map("transaction_id") @db.VarChar(255)
+  environment           String?   @map("environment") @db.VarChar(50)
+  signedDate            DateTime? @map("signed_date") @db.Timestamptz(6)
+  outcome               String    @default("RECEIVED") @db.VarChar(32)
+  errorMessage          String?   @map("error_message") @db.VarChar(255)
+  processedAt           DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  userId                Int?      @map("user_id")
+  store                 String    @default("APPLE") @map("store") @db.VarChar(16)
+  rawPayload            Json?     @map("raw_payload")
+  user                  User?     @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([originalTransactionId])
+  @@index([userId])
+  @@index([store, outcome])
+  @@map("subscription_notification")
+}
+
+model ExchangeRate {
+  id           Int      @id @default(autoincrement())
+  fromCurrency Currency @map("from_currency")
+  toCurrency   Currency @map("to_currency")
+  rate         Decimal  @map("rate") @db.Decimal(18, 8)
+  fetchedAt    DateTime @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  source       String   @default("exchangerate-api.com") @map("source") @db.VarChar(64)
+
+  @@unique([fromCurrency, toCurrency])
+  @@index([fromCurrency, toCurrency, fetchedAt])
+  @@map("exchange_rates")
+}
+
+model AnalyticsSession {
+  id          String    @id @db.VarChar(36)
+  userId      Int?      @map("user_id")
+  anonymousId String?   @map("anonymous_id") @db.VarChar(36)
+  platform    String    @map("platform") @db.VarChar(16)
+  appVersion  String?   @map("app_version") @db.VarChar(32)
+  osVersion   String?   @map("os_version") @db.VarChar(32)
+  startedAt   DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt     DateTime? @map("ended_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user   User?            @relation("UserAnalyticsSessions", fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  events AnalyticsEvent[]
+
+  @@index([userId, startedAt])
+  @@index([startedAt])
+  @@map("analytics_session")
+}
+
+model AnalyticsEvent {
+  id         Int                @id @default(autoincrement())
+  sessionId  String?            @map("session_id") @db.VarChar(36)
+  userId     Int?               @map("user_id")
+  eventName  AnalyticsEventName @map("event_name")
+  properties Json?              @map("properties")
+  occurredAt DateTime           @map("occurred_at") @db.Timestamptz(6)
+  createdAt  DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session AnalyticsSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  user    User?             @relation("UserAnalyticsEvents", fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([eventName, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([sessionId])
+  @@map("analytics_event")
+}
+
+enum AnalyticsEventName {
+  APP_OPEN
+  SIGNUP_COMPLETED
+  LOGIN_METHOD_SELECTED
+  TRIP_CREATED
+  MEMBER_INVITED
+  EXPENSE_ADDED
+  BILL_SCANNED
+  MARKET_OPENED
+  PLAN_VIEWED
+  PLAN_APPLIED
+  SUBSCRIPTION_VIEWED
+  SUBSCRIPTION_STARTED
+  RESTORE_PURCHASE_CLICKED
+  TRIP_PHOTO_UPLOADED
+  SCAN_PACK_REFUNDED
+  SCAN_PACK_PURCHASED
+  SCAN_CREDITS_GRANTED
+  SCAN_CREDITS_PAYWALL_VIEWED
+  TRIP_REQUEST_CREATED
+  TELEGRAM_CODE_REQUESTED
+  TELEGRAM_CODE_ISSUED
+  TELEGRAM_CODE_DENIED
+  BOARD_OPENED
+  PIN_LINK_SUBMITTED
+  PIN_EXTRACTION_STARTED
+  PIN_EXTRACTION_FINISHED
+  PIN_QUOTA_BLOCKED
+  PINS_SAVED
+  MARKET_SHARED
+  ENGAGEMENT_PUSH_SENT
+  ENGAGEMENT_PUSH_OPENED
+
+  @@map("analytics_event_name")
+}
+
+model plan_reminder_delivery {
+  id              Int                         @id @default(autoincrement())
+  plan_item_id    Int
+  device_token_id Int
+  delivery_type   plan_reminder_delivery_type
+  delivered_at    DateTime                    @default(now()) @db.Timestamptz(6)
+  device_token    DeviceToken                 @relation(fields: [device_token_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  trip_plan_item  TripPlanItem                @relation(fields: [plan_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([plan_item_id, device_token_id])
+  @@index([device_token_id])
+  @@index([plan_item_id])
+}
+
+enum TripRequestStatus {
+  OPEN
+  FULFILLED
+  REJECTED
+
+  @@map("trip_request_status")
+}
+
+enum TripStatus {
+  PLANNING
+  ONGOING
+  ENDED
+
+  @@map("trip_status")
+}
+
+/// Off-chain end-trip consensus while the trip stays ONGOING.
+enum TripEndRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+  CANCELLED
+
+  @@map("trip_end_request_status")
+}
+
+enum TripEndVoteDecision {
+  APPROVED
+  DENIED
+
+  @@map("trip_end_vote_decision")
+}
+
+/// What a member may do beyond taking part.
+///
+/// HOST is the trip's creator. CO_HOST is appointed by them, and exists so
+/// that approving an above-threshold payment does not depend on one person
+/// being awake. Both may approve; on chain the difference is not represented.
+enum TripMemberRole {
+  HOST
+  CO_HOST
+  MEMBER
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+
+  @@map("invite_status")
+}
+
+enum ExpenseCategory {
+  FOOD
+  STAY
+  TICKET
+  TRANSPORT
+  OTHER
+  COFFEE
+  SPA
+  GYM
+  NIGHT_CLUB
+  GROCERY
+  SHOPPING
+  CINEMA
+  PHARMACY
+  PARK
+
+  @@map("expense_category")
+}
+
+enum PlanScope {
+  GROUP
+  PERSONAL
+
+  @@map("plan_scope")
+}
+
+enum ActivityAction {
+  TRIP_CREATED
+  TRIP_UPDATED
+  TRIP_ENDED
+  MEMBER_INVITED
+  MEMBER_JOINED
+  MEMBER_REMOVED
+  BUDGET_CREATED
+  BUDGET_UPDATED
+  BUDGET_DELETED
+  BUDGET_PAID
+  EXPENSE_CREATED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  EXPENSE_SETTLED
+  PLAN_ITEM_CREATED
+  PLAN_ITEM_UPDATED
+  PLAN_ITEM_DELETED
+  PHOTO_UPLOADED
+
+  @@map("activity_action")
+}
+
+enum AuthProvider {
+  EMAIL
+  APPLE
+  GOOGLE
+
+  @@map("auth_provider")
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  REFUNDED
+  FAILED
+
+  @@map("payment_status")
+}
+
+enum ListingTag {
+  SOLO
+  FRIENDS
+  COUPLES
+  FAMILY
+  COMPANY
+
+  @@map("listing_tag")
+}
+
+enum FriendRequestStatus {
+  PENDING
+  DECLINED
+
+  @@map("friend_request_status")
+}
+
+enum ChatMessageType {
+  TEXT
+  IMAGE
+
+  @@map("chat_message_type")
+}
+
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  GRACE_PERIOD
+  BILLING_RETRY
+  EXPIRED
+  REVOKED
+
+  @@map("subscription_status")
+}
+
+enum Currency {
+  USD
+  EUR
+  VND
+  THB
+  KRW
+  JPY
+  CNY
+  TWD
+  SGD
+  MYR
+
+  @@map("currency_type")
+}
+
+enum plan_reminder_delivery_type {
+  PUSH
+  LIVE_ACTIVITY
+}
+
+model Board {
+  id            Int        @id @default(autoincrement())
+  userId        Int        @map("user_id")
+  title         String     @map("title") @db.VarChar(255)
+  description   String?    @map("description") @db.VarChar(500)
+  coverImageUrl String?    @map("cover_image_url") @db.VarChar(500)
+  cityId        Int?       @map("city_id")
+  stateId       Int?       @map("state_id")
+  countryId     Int?       @map("country_id")
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  city          City?      @relation(fields: [cityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  state         State?     @relation(fields: [stateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  country       Country?   @relation(fields: [countryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pins          BoardPin[]
+
+  @@index([userId])
+  @@index([cityId])
+  @@index([stateId])
+  @@index([countryId])
+  @@map("board")
+}
+
+model BoardPin {
+  id                 Int      @id @default(autoincrement())
+  boardId            Int      @map("board_id")
+  name               String   @map("name") @db.VarChar(255)
+  address            String?  @map("address") @db.VarChar(500)
+  latitude           Float?   @map("latitude")
+  longitude          Float?   @map("longitude")
+  notes              String?  @map("notes") @db.VarChar(1000)
+  sourceUrl          String?  @map("source_url") @db.VarChar(1000)
+  sourceTimestampSec Float?   @map("source_timestamp_sec")
+  category           String?  @map("category") @db.VarChar(64)
+  // Itinerary day narrated in the source video ("Day 1") — distinct from the
+  // AI-arranged day in generated trips (PinPlacement/TripPlanItem.dayNumber).
+  dayNumber          Int?     @map("day_number")
+  timeOfDayText      String?  @map("time_of_day_text") @db.VarChar(64)
+  sortOrder          Int      @default(0) @map("sort_order")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  board              Board    @relation(fields: [boardId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([boardId])
+  @@map("board_pin")
+}
+
+model PinExtractionCache {
+  id        Int      @id @default(autoincrement())
+  urlHash   String   @unique @map("url_hash") @db.VarChar(64)
+  sourceUrl String   @map("source_url") @db.VarChar(1000)
+  payload   Json     @map("payload")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Refreshed on every write (initial extraction + TTL-expired re-extraction).
+  // A row past this timestamp is a MISS for everyone, including the original
+  // payer — see PinExtractionService for the per-user billing rule.
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("pin_extraction_cache")
+}
+
+model PlanRouteCache {
+  id        Int      @id @default(autoincrement())
+  routeHash String   @unique @map("route_hash") @db.VarChar(64)
+  payload   Json     @map("payload")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("plan_route_cache")
+}
+
+enum PinExtractionStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+model PinExtractionSession {
+  id           String              @id @default(cuid())
+  userId       Int                 @map("user_id")
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sourceUrl    String              @map("source_url") @db.VarChar(1000)
+  urlHash      String              @map("url_hash") @db.VarChar(64)
+  status       PinExtractionStatus @default(QUEUED)
+  phase        String?             @db.VarChar(32)
+  videoMeta    Json?               @map("video_meta")
+  pins         Json                @default("[]")
+  fromCache    Boolean             @default(false) @map("from_cache")
+  errorCode    String?             @map("error_code") @db.VarChar(64)
+  errorMessage String?             @map("error_message") @db.VarChar(500)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt  DateTime?           @map("completed_at") @db.Timestamptz(6)
+  dismissedAt  DateTime?           @map("dismissed_at") @db.Timestamptz(6)
+
+  @@index([userId, status])
+  @@index([userId, dismissedAt])
+  @@map("pin_extraction_session")
+}
+
+// Persistent scan-credit ledger. One row per grant (signup bonus, Pro weekly
+// grant, purchase pack, pay_once, admin adjustment). `amount` is the immutable
+// original grant; `remaining` is decremented on consumption (DB CHECK keeps it
+// in [0, amount]). `expiresAt` is nullable and unused in v1 but lets expiry be
+// added later with no migration. Dedup is enforced by three partial unique
+// indexes added in raw SQL in the migration (a plain @@unique over a nullable
+// column would NOT dedupe purchases — Postgres treats NULLs as distinct):
+//   UNIQUE (user_id, external_ref, period_key) WHERE period_key IS NOT NULL
+//   UNIQUE (user_id, external_ref)             WHERE source IN ('purchase','pay_once')
+//   UNIQUE (user_id)                           WHERE source = 'signup_bonus'
+model ScanCreditGrant {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @map("user_id")
+  source      String    @db.VarChar(32)
+  productId   String?   @map("product_id") @db.VarChar(255)
+  amount      Int
+  remaining   Int
+  grantedAt   DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
+  externalRef String?   @map("external_ref") @db.VarChar(255)
+  periodKey   String?   @map("period_key") @db.VarChar(255)
+  // Set when an Apple refund/revoke claws back this grant's unused credits.
+  // Doubles as the clawback idempotency guard and an audit signal (revoked by
+  // refund vs spent down naturally). Nullable; mirrors expiresAt.
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+  // Apple environment ('Production'/'Sandbox') the grant originated from, copied
+  // from the originating SubscriptionTransaction so sandbox (TestFlight / App
+  // Review) credits are filterable from real ones. Null for non-purchase grants
+  // (signup_bonus, admin_adjustment), which carry no environment dimension.
+  environment String?   @map("environment") @db.VarChar(50)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user         User                    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  consumptions ScanCreditConsumption[]
+
+  @@index([userId, grantedAt])
+  @@index([userId, remaining])
+  @@map("scan_credit_grant")
+}
+
+// One row per consumed scan, keyed by the PinExtractionSession id so consume
+// and refund are idempotent (mirrors the old usage-row semantics). `refundedAt`
+// set when the extraction FAILED/CANCELLED/DONE+fromCache; the grant's
+// `remaining` is restored in the same transaction.
+model ScanCreditConsumption {
+  id         Int       @id @default(autoincrement())
+  userId     Int       @map("user_id")
+  grantId    Int       @map("grant_id")
+  sessionId  String    @unique @map("session_id")
+  amount     Int       @default(1)
+  consumedAt DateTime  @default(now()) @map("consumed_at") @db.Timestamptz(6)
+  refundedAt DateTime? @map("refunded_at") @db.Timestamptz(6)
+
+  grant ScanCreditGrant @relation(fields: [grantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, consumedAt])
+  @@map("scan_credit_consumption")
+}
+
+// Pool of Apple one-time-use subscription offer codes handed out by the
+// Telegram marketing bot. One code is assigned to at most one Telegram user
+// (enforced by a partial unique index on assigned_telegram_user_id added in
+// raw SQL in the migration — Prisma cannot express partial unique indexes).
+// A code is "available" while assigned_telegram_user_id IS NULL. Telegram user
+// ids exceed 32 bits, so the assignee is a BigInt.
+model TelegramOfferCode {
+  id                       Int       @id @default(autoincrement())
+  code                     String    @unique @db.VarChar(255)
+  batchLabel               String?   @map("batch_label") @db.VarChar(100)
+  assignedTelegramUserId   BigInt?   @map("assigned_telegram_user_id")
+  assignedTelegramUsername String?   @map("assigned_telegram_username") @db.VarChar(64)
+  assignedAt               DateTime? @map("assigned_at") @db.Timestamptz(6)
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([assignedTelegramUserId])
+  @@map("telegram_offer_code")
+}
+
+// Editable Telegram campaign settings (admin page): campaign on/off, greeting
+// text, CTA text. Tiny key/value store; the bot reads it at runtime so changes
+// apply without a redeploy. Keys: campaign_enabled ('true'/'false'),
+// welcome_text, campaign_cta.
+model TelegramSetting {
+  key       String   @id @db.VarChar(64)
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("telegram_setting")
+}
+
+// Journal / blog posts published to the marketing site, managed from the admin
+// web "Journal" page. Site rendering is a follow-up; for now posts live here.
+model Journal {
+  id            Int           @id @default(autoincrement())
+  slug          String        @unique @map("slug") @db.VarChar(255)
+  title         String        @map("title") @db.VarChar(255)
+  label         JournalLabel  @map("label")
+  excerpt       String?       @map("excerpt") @db.VarChar(500)
+  content       String        @map("content")
+  coverImageKey String?       @map("cover_image_key") @db.VarChar(500)
+  status        JournalStatus @default(DRAFT) @map("status")
+  publishedAt   DateTime?     @map("published_at") @db.Timestamptz(6)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("journal")
+}
+
+enum JournalLabel {
+  TRIP_PLAN
+  JOURNAL
+  INTERVIEW
+
+  @@map("journal_label")
+}
+
+enum JournalStatus {
+  DRAFT
+  PUBLISHED
+
+  @@map("journal_status")
+}
+
+// Language of AI-generated engagement push copy. Captured from the device
+// (token registration) or set explicitly in Settings. Bounded enum (not free
+// String) so the LLM/static-template language is always valid.
+enum EngagementLocale {
+  EN
+  VN
+
+  @@map("engagement_locale")
+}
+
+// The engagement-push triggers, in their own enum (not AnalyticsEventName).
+enum EngagementTrigger {
+  UNFINISHED_PLAN
+  WEATHER
+  DORMANT
+  NEW_PLAN_AVAILABLE
+
+  @@map("engagement_trigger")
+}
+
+// One row per engagement push sent. Drives BOTH the 24h-per-user cadence cap
+// (@@index([userId, sentAt]) + candidate-SQL exclusion) AND per-trigger
+// idempotency (`dedupeKey` unique → insert-before-send, P2002 = already sent,
+// skip; also closes overlapping-cron-tick races). `tripId`/`listingId` are
+// loose Ints (no FK) to avoid coupling deletes, mirroring plan_reminder_delivery.
+model EngagementNotification {
+  id        Int               @id @default(autoincrement())
+  userId    Int               @map("user_id")
+  trigger   EngagementTrigger @map("trigger")
+  tripId    Int?              @map("trip_id")
+  listingId Int?              @map("listing_id")
+  dedupeKey String            @unique @map("dedupe_key") @db.VarChar(160)
+  title     String            @map("title") @db.VarChar(200)
+  body      String            @map("body") @db.VarChar(400)
+  locale    EngagementLocale  @map("locale")
+  usedLlm   Boolean           @default(false) @map("used_llm")
+  sentAt    DateTime          @default(now()) @map("sent_at") @db.Timestamptz(6)
+  openedAt  DateTime?         @map("opened_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, sentAt])
+  @@map("engagement_notification")
+}
+
+// Cached current-weather per city (Google Maps Platform Weather API). Copies
+// the ExchangeRate cache shape: one row per city, upserted, TTL via `fetchedAt`.
+// `condition` is the normalized bucket (HOT/RAIN/COLD/MILD/STORM); `rawType`
+// keeps the provider's raw condition type for debugging.
+model WeatherSnapshot {
+  id        Int      @id @default(autoincrement())
+  cityId    Int      @unique @map("city_id")
+  tempC     Decimal  @map("temp_c") @db.Decimal(5, 2)
+  condition String   @map("condition") @db.VarChar(32)
+  rawType   String?  @map("raw_type") @db.VarChar(64)
+  payload   Json?    @map("payload")
+  fetchedAt DateTime @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  source    String   @default("google-weather") @map("source") @db.VarChar(64)
+
+  @@index([fetchedAt])
+  @@map("weather_snapshot")
+}
+
+enum VaultStatus {
+  ACTIVE
+  SETTLING
+  CLOSED
+
+  @@map("vault_status")
+}
+
+enum WalletProvider {
+  PRIVY
+
+  @@map("wallet_provider")
+}
+
+enum VaultTxKind {
+  DEPOSIT
+  SPEND
+  REVERT
+  SETTLEMENT
+
+  @@map("vault_tx_kind")
+}
+
+enum VaultTxStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+
+  @@map("vault_tx_status")
+}
+
+/// One Solana vault per trip. Mirrors the on-chain TripVault PDA; the chain is
+/// authoritative and this row is corrected to match it, never the reverse.
+/// One cash debt between two trip members, confirmed as received.
+///
+/// The vault can pay out but cannot collect, so whatever it does not cover is
+/// handed over in cash. Only the creditor may confirm: a debtor who could clear
+/// their own debt by asserting they paid it makes the record worthless.
+///
+/// Derived from the ledger rather than stored up front, so a row exists only
+/// once someone has confirmed receipt.
+model VaultCashSettlement {
+  id          Int      @id @default(autoincrement())
+  tripVaultId Int      @map("trip_vault_id")
+  /// Who owes the money.
+  fromUserId  Int      @map("from_user_id")
+  /// Who is owed it, and the only person who may confirm.
+  toUserId    Int      @map("to_user_id")
+  amountMicro BigInt   @map("amount_micro")
+  confirmedAt DateTime @default(now()) @map("confirmed_at") @db.Timestamptz(6)
+
+  tripVault TripVault @relation(fields: [tripVaultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fromUser  User      @relation("cashSettlementFrom", fields: [fromUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  toUser    User      @relation("cashSettlementTo", fields: [toUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tripVaultId, fromUserId, toUserId])
+  @@map("vault_cash_settlement")
+}
+
+/// Host-started end-trip review. Members vote Approve/Deny; unanimous Approve
+/// ends the trip and triggers server-authority vault settlement.
+model TripEndRequest {
+  id          Int                 @id @default(autoincrement())
+  tripId      Int                 @unique @map("trip_id")
+  requestedBy Int                 @map("requested_by")
+  status      TripEndRequestStatus @default(PENDING) @map("status")
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt  DateTime?           @map("resolved_at") @db.Timestamptz(6)
+  trip        Trip                @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  requester   User                @relation("TripEndRequester", fields: [requestedBy], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  votes       TripEndVote[]
+
+  @@index([status])
+  @@map("trip_end_request")
+}
+
+model TripEndVote {
+  id        Int                 @id @default(autoincrement())
+  requestId Int                 @map("request_id")
+  userId    Int                 @map("user_id")
+  decision  TripEndVoteDecision @map("decision")
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  request   TripEndRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([requestId, userId])
+  @@index([userId])
+  @@map("trip_end_vote")
+}
+
+model TripVault {
+  id              Int                   @id @default(autoincrement())
+  tripId          Int                   @unique @map("trip_id")
+  vaultPda        String                @map("vault_pda") @db.VarChar(64)
+  usdcAta         String                @map("usdc_ata") @db.VarChar(64)
+  thresholdMicro  BigInt                @map("threshold_micro")
+  dailyLimitMicro BigInt                @map("daily_limit_micro")
+  status          VaultStatus           @default(ACTIVE) @map("status")
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  trip            Trip                  @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  transactions    VaultTransaction[]
+  cashSettlements VaultCashSettlement[]
+
+  @@index([status])
+  @@map("trip_vault")
+}
+
+/// A user's embedded wallet public key. The server never holds the secret.
+model WalletAccount {
+  id        Int            @id @default(autoincrement())
+  userId    Int            @unique @map("user_id")
+  publicKey String         @map("public_key") @db.VarChar(64)
+  provider  WalletProvider @default(PRIVY) @map("provider")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([publicKey])
+  @@map("wallet_account")
+}
+
+/// Read-optimised mirror of an on-chain operation plus its fiat payout leg.
+model VaultTransaction {
+  id               Int              @id @default(autoincrement())
+  tripVaultId      Int              @map("trip_vault_id")
+  userId           Int?             @map("user_id")
+  kind             VaultTxKind      @map("kind")
+  status           VaultTxStatus    @default(PENDING) @map("status")
+  amountMicro      BigInt           @map("amount_micro")
+  signature        String?          @map("signature") @db.VarChar(128)
+  /// Deterministic idempotency key for the payout leg, derived from this row id.
+  payoutRef        String?          @unique @map("payout_ref") @db.VarChar(64)
+  payoutStatus     String?          @map("payout_status") @db.VarChar(32)
+  proposalPda      String?          @map("proposal_pda") @db.VarChar(64)
+  /// When the second member's approval executed the proposal and the money
+  /// actually left the vault. Null while a proposal is still waiting, which is
+  /// what keeps the reconcile job from paying a merchant for an unmoved spend.
+  approvedAt                DateTime?     @map("approved_at")
+  expenseId        Int?             @unique @map("expense_id")
+  bankBin          String?          @map("bank_bin") @db.VarChar(16)
+  bankAccount      String?          @map("bank_account") @db.VarChar(64)
+  amountVnd        BigInt?          @map("amount_vnd")
+  failureCode      String?          @map("failure_code") @db.VarChar(64)
+  /// Receipt fields, captured from the quote. They are priced at that moment and
+  /// cannot be recomputed later: the FX rate moves, and the recipient name comes
+  /// from the payout provider rather than from the QR code.
+  recipientName    String?          @map("recipient_name") @db.VarChar(255)
+  /// The scanned code, kept so a payment can be repeated without scanning
+  /// again. Bank and account alone are not enough: the payload also carries the
+  /// service and currency fields the decoder expects.
+  qrPayload        String?          @map("qr_payload") @db.VarChar(512)
+  feeMicro         BigInt?          @map("fee_micro")
+  rate             String?          @map("rate") @db.VarChar(32)
+  note             String?          @map("note") @db.VarChar(255)
+  /// Expense details captured at prepare time. The expense itself is only
+  /// created once the payout confirms, which can be minutes later in the
+  /// reconciliation cron, so they have to survive the gap.
+  expenseName      String?          @map("expense_name") @db.VarChar(255)
+  expenseCategory  ExpenseCategory? @map("expense_category")
+  shareWithUserIds Int[]            @map("share_with_user_ids")
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tripVault        TripVault        @relation(fields: [tripVaultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user             User?            @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  expense          Expense?         @relation(fields: [expenseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([tripVaultId, status])
+  @@index([status, createdAt])
+  @@map("vault_transaction")
+}
+
+/**
+ * ------------------------- Fare Watch (Radar) -------------------------
+ */
+// "Săn vé": guest (web, phone-only) or app user places a fare-watch order;
+// a cron engine checks cached fares and pings Zalo ZNS / APNs when the price
+// crosses the target. Spec: docs/fare-watch-spec.md.
+
+enum FareWatchStatus {
+  ACTIVE
+  PAUSED
+  TRIGGERED
+  EXPIRED
+  CANCELLED
+}
+
+enum FareTripType {
+  ONE_WAY
+  ROUND_TRIP
+}
+
+enum FareAlertChannel {
+  ZNS
+  PUSH
+  BOTH
+}
+
+model FareWatchOrder {
+  id            Int       @id @default(autoincrement())
+  publicId      String    @unique @default(cuid()) @map("public_id")
+  // Owner: an app user OR a web guest identified by phone. No FK relation on
+  // purpose: guests have no User row, and orders must survive user deletion.
+  userId        Int?      @map("user_id")
+  // Display name for ZNS personalization (Zalo requires a customer-name
+  // param in alert templates). Optional for app users.
+  name          String?   @db.VarChar(60)
+  phone         String?   @db.VarChar(16)
+  phoneVerified Boolean   @default(false) @map("phone_verified")
+  // OTP kept as a hash; cleared after verification.
+  otpHash       String?   @map("otp_hash") @db.VarChar(64)
+  otpExpiresAt  DateTime? @map("otp_expires_at") @db.Timestamptz(6)
+  otpAttempts   Int       @default(0) @map("otp_attempts")
+
+  origin      String       @db.VarChar(3)
+  destination String       @db.VarChar(3)
+  tripType    FareTripType @default(ONE_WAY) @map("trip_type")
+  dateFrom    DateTime     @map("date_from") @db.Date
+  dateTo      DateTime     @map("date_to") @db.Date
+  returnFrom  DateTime?    @map("return_from") @db.Date
+  returnTo    DateTime?    @map("return_to") @db.Date
+
+  targetPrice Int?             @map("target_price")
+  autoTarget  Boolean          @default(false) @map("auto_target")
+  channel     FareAlertChannel @default(ZNS)
+  tripId      Int?             @map("trip_id")
+
+  status            FareWatchStatus @default(ACTIVE)
+  expiresAt         DateTime        @map("expires_at") @db.Timestamptz(6)
+  lastNotifiedAt    DateTime?       @map("last_notified_at") @db.Timestamptz(6)
+  lastNotifiedPrice Int?            @map("last_notified_price")
+  notifyCount       Int             @default(0) @map("notify_count")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  alerts FareAlertLog[]
+
+  @@index([status, expiresAt])
+  @@index([origin, destination, dateFrom])
+  @@index([userId])
+  @@index([phone])
+  @@map("fare_watch_order")
+}
+
+// Append-only fare history: powers alerts today and the 90-day price
+// sparkline / "good price" suggestion tomorrow.
+model FareQuote {
+  id          Int       @id @default(autoincrement())
+  origin      String    @db.VarChar(3)
+  destination String    @db.VarChar(3)
+  departDate  DateTime  @map("depart_date") @db.Date
+  returnDate  DateTime? @map("return_date") @db.Date
+  airline     String    @db.VarChar(8)
+  price       Int
+  source      String    @db.VarChar(24)
+  deepLink    String?   @map("deep_link")
+  fetchedAt   DateTime  @default(now()) @map("fetched_at") @db.Timestamptz(6)
+
+  alerts FareAlertLog[]
+
+  @@index([origin, destination, departDate, fetchedAt])
+  @@map("fare_quote")
+}
+
+model FareAlertLog {
+  id        Int              @id @default(autoincrement())
+  orderId   Int              @map("order_id")
+  order     FareWatchOrder   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  quoteId   Int?             @map("quote_id")
+  quote     FareQuote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  price     Int
+  channel   FareAlertChannel
+  znsMsgId  String?          @map("zns_msg_id") @db.VarChar(64)
+  status    String           @db.VarChar(16)
+  sentAt    DateTime         @default(now()) @map("sent_at") @db.Timestamptz(6)
+  clickedAt DateTime?        @map("clicked_at") @db.Timestamptz(6)
+
+  @@index([orderId, sentAt])
+  @@map("fare_alert_log")
+}
+
+// Zalo OA OAuth state. Zalo ROTATES the refresh token on every use, so the
+// freshest pair must be persisted; a stale refresh token is dead after one
+// reuse. Single row (id=1), upserted by ZnsService.
+model ZaloOauthToken {
+  id           Int      @id @default(1)
+  accessToken  String   @map("access_token")
+  refreshToken String   @map("refresh_token")
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("zalo_oauth_token")
+}

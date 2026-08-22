@@ -1,0 +1,22 @@
+skip_local_validator = true
+
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+oneplan_vault = "8pjmDZvmRzjcSwzffqnsdzsPRb3nV9BiVDhGU3vmR7uD"
+
+[programs.localnet]
+oneplan_vault = "8pjmDZvmRzjcSwzffqnsdzsPRb3nV9BiVDhGU3vmR7uD"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/oneplan-devnet.json"
+
+[scripts]
+test = "cargo test"
+
+[hooks]

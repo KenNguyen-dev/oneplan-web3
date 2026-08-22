@@ -1,0 +1,41 @@
+# OS
+.DS_Store
+
+# iOS / Xcode
+build/
+DerivedData/
+*.xcuserdatad/
+**/xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcarchive
+*.ipa
+*.dSYM
+.build/
+.swiftpm
+.derivedData
+
+# Android
+.gradle/
+local.properties
+
+# Node / Server
+node_modules/
+dist/
+.pnpm-store/
+.env
+.env.local
+.env.*.local
+server/keys/
+*.p8
+
+# Test coverage
+coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# GitNexus
+.gitnexus/

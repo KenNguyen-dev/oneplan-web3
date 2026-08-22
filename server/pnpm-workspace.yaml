@@ -1,0 +1,9 @@
+allowBuilds:
+  bigint-buffer: set this to true or false
+  bufferutil: set this to true or false
+  utf-8-validate: set this to true or false
+
+onlyBuiltDependencies: bcrypt,esbuild
+
+overrides:
+  fastify: ^5.8.4

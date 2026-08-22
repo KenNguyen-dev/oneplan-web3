@@ -1,0 +1,33 @@
+import { Module } from '@nestjs/common';
+
+import { ExpensesModule } from '../expenses/expenses.module';
+import { PayoutModule } from '../payout/payout.module';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { TripVaultHistoryService } from './trip-vault-history.service';
+import { TripVaultPayService } from './trip-vault-pay.service';
+import { TripVaultSettlementService } from './trip-vault-settlement.service';
+import { TripVaultReconcileService } from './trip-vault-reconcile.service';
+import { TripVaultController } from './trip-vault.controller';
+import { WalletController } from './wallet.controller';
+import { WalletWithdrawService } from './wallet-withdraw.service';
+import { TripVaultService } from './trip-vault.service';
+
+@Module({
+  imports: [PayoutModule, ExpensesModule, RealtimeModule],
+  controllers: [TripVaultController, WalletController],
+  providers: [
+    TripVaultService,
+    TripVaultPayService,
+    TripVaultHistoryService,
+    TripVaultSettlementService,
+    TripVaultReconcileService,
+    WalletWithdrawService,
+  ],
+  exports: [
+    TripVaultService,
+    TripVaultPayService,
+    TripVaultHistoryService,
+    TripVaultSettlementService,
+  ],
+})
+export class TripVaultModule {}

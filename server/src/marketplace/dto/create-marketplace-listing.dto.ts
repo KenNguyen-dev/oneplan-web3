@@ -1,0 +1,89 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ArrayMinSize,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateIf,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { Currency, ListingTag } from '@prisma/client';
+import { NoProfanity } from '../../common/validators/no-profanity.decorator';
+
+export class CreateMarketplaceListingDto {
+  @ApiProperty({ maxLength: 255 })
+  @IsString()
+  @MaxLength(255)
+  @NoProfanity()
+  name: string;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  @NoProfanity()
+  description?: string;
+
+  @ApiPropertyOptional({ maxLength: 2048 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  coverImageUrl?: string;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  cityId?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  stateId?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  countryId?: number;
+
+  @ApiProperty({ type: 'number', description: 'Price in local currency' })
+  @IsNumber()
+  @Min(0)
+  price: number;
+
+  @ApiPropertyOptional({
+    enum: Currency,
+    enumName: 'Currency',
+    description: "Defaults to user's preferredCurrency when omitted",
+  })
+  @IsOptional()
+  @IsEnum(Currency)
+  currency?: Currency;
+
+  @ApiProperty({ type: 'integer', minimum: 1 })
+  @IsInt()
+  @Min(1)
+  durationDays: number;
+
+  @ApiPropertyOptional({
+    maxLength: 255,
+    nullable: true,
+    description: 'Google Play product identifier used for Android purchases',
+  })
+  @ValidateIf((_object, value) => value !== null && value !== undefined)
+  @IsString()
+  @MaxLength(255)
+  playProductId?: string | null;
+
+  @ApiProperty({
+    enum: ListingTag,
+    enumName: 'ListingTag',
+    isArray: true,
+    description: 'At least one tag required',
+  })
+  @IsEnum(ListingTag, { each: true })
+  @ArrayMinSize(1)
+  tags: ListingTag[];
+}
