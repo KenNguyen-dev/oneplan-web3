@@ -1,9 +1,18 @@
 allowBuilds:
-  bigint-buffer: set this to true or false
-  bufferutil: set this to true or false
-  utf-8-validate: set this to true or false
-
-onlyBuiltDependencies: bcrypt,esbuild
+  '@prisma/client': true
+  '@prisma/engines': true
+  bcrypt: true
+  bigint-buffer: true
+  bufferutil: true
+  esbuild: true
+  prisma: true
+  sharp: true
+  utf-8-validate: true
+  '@firebase/util': false
+  '@nestjs/core': false
+  '@scarf/scarf': false
+  protobufjs: false
+  unrs-resolver: false
 
 overrides:
   fastify: ^5.8.4
